@@ -25,6 +25,48 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+  // Export the board the reader is actually looking at: the same filtered,
+  // sorted rows the table shows, plus the model's own multipliers, so a
+  // spreadsheet can redo the ranking without re-reading the snapshot.
+  var lastExport = null;
+  function csvCell(value) {
+    if (value === null || value === undefined) return '';
+    var text = String(value);
+    if (text.indexOf('"') >= 0 || text.indexOf(',') >= 0 || text.indexOf('\n') >= 0 || text.indexOf('\r') >= 0) {
+      return '"' + text.split('"').join('""') + '"';
+    }
+    return text;
+  }
+  function csvFileName() {
+    var stamp = new Date().toISOString().slice(0, 10);
+    var tag = state.category !== 'all' ? '-' + state.category.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
+    return 'token-radar-' + state.tab + tag + '-' + stamp + '.csv';
+  }
+  function exportRows() {
+    var head, lines;
+    if (state.tab === 'live') {
+      head = ['Status', 'Protocol', 'Category', 'Chains', 'TVL USD', '7d change %', 'Market cap USD'];
+      lines = DATA.live.map(function (r) {
+        return ['live', r.name, r.category || 'Other', (r.chains || []).join('; '), r.tvl_usd, r.change_7d, r.mcap_usd].map(csvCell).join(',');
+      });
+    } else {
+      head = ['Rank', 'Protocol', 'Category', 'Chains', 'TVL USD', '7d change %', 'Age days', 'Category multiple', 'Growth multiplier', 'Maturity multiplier', 'Chain multiplier', 'Implied value USD', 'Watchlist'];
+      lines = sortedRows(rows()).map(function (r) {
+        return [r.rank, r.name, r.category || 'Other', (r.chains || []).join('; '), r.tvl_usd, r.change_7d, r.age_days, r.category_multiple, r.growth_multiplier, r.maturity_multiplier, r.chain_multiplier, r.implied_value_usd, isWatch(r) ? 'yes' : 'no'].map(csvCell).join(',');
+      });
+    }
+    var blob = new Blob([head.map(csvCell).join(',') + '\r\n' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = csvFileName();
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    lastExport = { count: lines.length, name: link.download };
+    render();
+  }
   // The model in one function: the page recomputes a row from the snapshot
   // figures and the multipliers board.json carries, so the page's code and
   // the board's data are visibly the same arithmetic.
@@ -146,6 +188,11 @@
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chain),
       watch,
       el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Token status' }), el('div', { class: 'tabs' }, pre, live)),
+      el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Board tools' }),
+        el('div', { class: 'tools' },
+          el('button', { class: 'button', type: 'button', text: 'Export CSV', onclick: exportRows }),
+          el('button', { class: 'button ghost', type: 'button', text: 'How it works', onclick: openMethod }))),
+      lastExport ? el('span', { class: 'export-note', text: 'Exported ' + lastExport.count + ' rows to ' + lastExport.name }) : null,
       el('span', { class: 'count', text: state.tab === 'pre-token' ? rows().length + ' rows shown' : DATA.live.length + ' live-token protocols' }));
   }
   function sortHeader(key, label) {
@@ -223,6 +270,50 @@
         'implied = round( tvl_usd x category_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + min(chains - 1, ' + m.chain_max_steps + ') x ' + m.chain_step + ') )'),
       el('p', { class: 'sub', text: 'The category multiple is the median market-cap-to-TVL ratio of the live-token protocols in the same category, when at least ' + m.min_comparables + ' exist; otherwise the global median (' + DATA.global_multiple + 'x). It is clamped to ' + m.multiple_min + 'x to ' + m.multiple_max + 'x. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Wrapped, staked and bridged products are excluded from the board, and live-token protocols are set aside with their market caps shown.' }));
   }
+  // The method, in plain words: a second dialog that explains the model
+  // with the live parameters, so the numbers in the text can never drift
+  // from the numbers the board was scored with. A worked example uses the
+  // protocol at the top of the board, with its own figures.
+  var methodDialog = el('dialog', { class: 'method', id: 'method', 'aria-labelledby': 'method-title' });
+  methodDialog.addEventListener('click', function (e) { if (e.target === methodDialog) methodDialog.close(); });
+  function openMethod() {
+    var m = DATA.model;
+    var top = DATA.rows[0];
+    methodDialog.textContent = '';
+    methodDialog.appendChild(el('div', { class: 'method-body' },
+      el('div', { class: 'method-head' },
+        el('div', null,
+          el('span', { class: 'brand-name', text: DATA.model_version + ' model' }),
+          el('h2', { id: 'method-title', text: 'How the radar works' }),
+          el('p', { class: 'sub', text: 'Implied value answers one question: if this protocol launched a token today, what would it be worth? The radar prices it the way a market would, by looking at similar protocols that already have a token.' })),
+        el('button', { class: 'close', type: 'button', 'aria-label': 'Close the method explanation', text: 'Close', onclick: function () { methodDialog.close(); } })),
+      el('ol', { class: 'method-steps' },
+        el('li', null,
+          el('h3', { text: '1. Find the neighbours' }),
+          el('p', { html: 'In the protocol\u2019s own category, take every protocol whose token already trades and divide its market cap by its TVL. The middle value of those ratios is the category multiple. A category needs at least <b>' + m.min_comparables + '</b> such neighbours; with fewer, the board falls back to the global median of <b>' + DATA.global_multiple + 'x</b>. The multiple is then clamped between <b>' + m.multiple_min + 'x</b> and <b>' + m.multiple_max + 'x</b>, so one overheated category cannot set the price.' })),
+        el('li', null,
+          el('h3', { text: '2. Start from locked value' }),
+          el('p', { text: 'Implied value starts as TVL times the category multiple. A protocol with twice the locked value of a same-category neighbour starts with twice the implied value, before any adjustment.' })),
+        el('li', null,
+          el('h3', { text: '3. Adjust for momentum, staying power and reach' }),
+          el('p', { html: 'Three multipliers nudge that starting number. <b>Growth:</b> the seven-day change in TVL, clamped between ' + m.growth_floor + '% and ' + m.growth_cap + '%, and counted at ' + Math.round(m.growth_weight * 100) + '% weight, so a one-week spike cannot carry a protocol. <b>Maturity:</b> the longer a protocol has run with no token, the closer its multiplier gets to ' + (m.maturity_floor + m.maturity_range) + ', rising from ' + m.maturity_floor + ' over ' + m.maturity_days + ' days. <b>Chain:</b> each extra chain beyond the first adds ' + (m.chain_step * 100) + '%, up to ' + m.chain_max_steps + ' extra chains.' })),
+        el('li', null,
+          el('h3', { text: '4. Know what the number is not' }),
+          el('p', { text: 'Implied value is an estimate, not a price, and it says nothing about whether or when a token appears. Wrapped, staked and bridged products are left off the board, and protocols whose token already trades are set aside with their real market caps shown.' }))),
+      top ? el('section', { class: 'detail-section' },
+        el('h3', { text: 'Worked example: ' + top.name }),
+        el('div', { class: 'worked' },
+          el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(top.tvl_usd) })),
+          el('div', null, el('span', { text: 'Category multiple (' + (top.comparables > 0 ? top.comparables + ' live neighbours' : 'global fallback') + ')' }), el('b', { class: 'num', text: top.category_multiple + 'x' })),
+          el('div', null, el('span', { text: 'Growth multiplier (7d ' + fmtPct(top.change_7d) + ')' }), el('b', { class: 'num', text: String(top.growth_multiplier) })),
+          el('div', null, el('span', { text: 'Maturity multiplier (' + fmtAge(top.age_days) + ' with no token)' }), el('b', { class: 'num', text: String(top.maturity_multiplier) })),
+          el('div', null, el('span', { text: 'Chain multiplier (' + (top.chains || []).length + ' chains)' }), el('b', { class: 'num', text: String(top.chain_multiplier) })),
+          el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(top.implied_value_usd) }))),
+        el('p', { class: 'sub', text: 'Multiply the five numbers above and round: that is the figure on the board. Nothing else goes into the ranking.' })) : null,
+      el('p', { class: 'note', text: 'Every number in this explanation comes from the same snapshot the board was scored from, so it stays true even if the snapshot changes.' })));
+    if (typeof methodDialog.showModal === 'function') { if (!methodDialog.open) methodDialog.showModal(); }
+    else methodDialog.setAttribute('open', '');
+  }
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); });
   function openDetail(slug) {
@@ -271,9 +362,14 @@
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
+    if (!methodDialog.isConnected) app.appendChild(methodDialog);
     if (state.selected) openDetail(state.selected);
   }
   readHash();
   render();
-  window.addEventListener('keydown', function (e) { if (e.key === 'Escape' && dialog.open) dialog.close(); });
+  window.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (dialog.open) dialog.close();
+    if (methodDialog.open) methodDialog.close();
+  });
 })();
