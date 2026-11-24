@@ -679,8 +679,8 @@ export function parseSnapshot(text: string): Snapshot {
       return;
     }
     const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      bad('lacks a slug, a name or a TVL');
+    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd) || p.tvl_usd <= 0) {
+      bad('lacks a slug, a name or a positive TVL');
       return;
     }
     protocols.push({

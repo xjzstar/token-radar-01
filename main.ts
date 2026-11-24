@@ -27,10 +27,16 @@ const TEXT_MAX_BYTES = 65_536;
 const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
 const IMAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
-/** --name <value> out of the arguments, or the fallback. */
+/** --name <value> out of the arguments, or the fallback. A flag left with no value fails loudly instead of silently falling back to a path the run never asked for. */
 function arg(name: string, fallback: string): string {
   const at = process.argv.indexOf(`--${name}`);
-  if (at >= 0 && at + 1 < process.argv.length) return process.argv[at + 1]!;
+  if (at >= 0) {
+    if (at + 1 >= process.argv.length) {
+      process.stderr.write(`token radar: --${name} needs a value: pass --${name} <value>\n`);
+      process.exit(2);
+    }
+    return process.argv[at + 1]!;
+  }
   const withEquals = process.argv.find((a) => a.startsWith(`--${name}=`));
   return withEquals === undefined ? fallback : withEquals.slice(name.length + 3);
 }
