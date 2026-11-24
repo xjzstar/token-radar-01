@@ -53,6 +53,10 @@ if (!existsSync(inputFile)) {
   process.stderr.write(`token radar: no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input\n`);
   process.exit(2);
 }
+if (!statSync(inputFile).isFile() || statSync(inputFile).size === 0) {
+  process.stderr.write(`token radar: ${inputFile} is not a snapshot file with content: point --input at the sealed snapshot.json\n`);
+  process.exit(2);
+}
 
 const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
@@ -95,6 +99,9 @@ try {
   for (const name of shots) {
     if (!IMAGE_NAME.test(name)) {
       fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`, 1);
+    }
+    if (statSync(join(out, 'screenshots', name)).size === 0) {
+      fail(`screenshots/${name}: the copied image holds no bytes, re-shoot it before handing in`, 1);
     }
   }
 
